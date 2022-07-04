@@ -3,11 +3,21 @@ frameworkVersion: '2'
 
 plugins:
   - serverless-appsync-plugin
+  - serverless-iam-roles-per-function # allow to specify iamRoleStatements block for individual functions
+  - serverless-export-env
+  - serverless-manifest-plugin
 
 provider:
   name: aws
   runtime: nodejs12.x
   region: eu-west-2
+  environment: ## variables under provided will be applied to all functions
+    STAGE: ${self:custom.stage}
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1' # AWS SDK to enable HTTP Keep-Alive
+
+  # with serverless framework default behaviour is iamRoleStatements under provider
+  # is going to be shared by all the functions in this project
+  # not best practice for security
 
 package:
   exclude:
@@ -15,16 +25,49 @@ package:
     - package.json
 
 custom:
+  region: ${opt:region, self:provider.region}
+  stage: ${opt:stage, self:provider.stage} # check whether or not you pass in a stage override from command line
   appSync:
     - ${file(serverless.appsync-api.yml)}
+  
+  manifest:
+    postProcess: ./processManifest.js
+    disablePostDeployGeneration: true
+    disableOutput: true
+    silent: true
+
+functions:
+  confirmUserSignup:
+    handler: functions/confirm-user-signup.handler
+    environment: # variables applied to this function
+      USERS_TABLE: !Ref UsersTable
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:PutItem
+        Resource: !GetAtt UsersTable.Arn
 
 resources:
   Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S # string
+        Tags:
+          - Key: Environment
+            Value: ${self:custom.stage}
+          - Key: Name
+            Value: users-table
     CognitoUserPool:
       Type: AWS::Cognito::UserPool
       Properties:
         AutoVerifiedAttributes: # verify any email addresses
-        - email
+          - email
         Policies:
           PasswordPolicy:
             MinimumLength: 8
@@ -39,6 +82,30 @@ resources:
             Name: name
             Required: false
             Mutable: true
+        LambdaConfig:
+          PostConfirmation: !GetAtt ConfirmUserSignupLambdaFunction.Arn
+    UserPoolInvokeConfirmUserSignupLambdaPermission: # permission to call lambda function
+      Type: AWS::Lambda::Permission # grant CognitoUserPool permission to invokeFunction against ConfirmUserSignupLambdaFunction
+      Properties:
+        Action: lambda:invokeFunction
+        FunctionName: !Ref ConfirmUserSignupLambdaFunction
+        Principal: cognito-idp.amazonaws.com
+        SourceArn: !GetAtt CognitoUserPool.Arn
+
+    WebUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        UserPoolId: !Ref CognitoUserPool
+        ClientName: web
+        ExplicitAuthFlows:
+          - ALLOW_USER_SRP_AUTH
+          - ALLOW_USER_PASSWORD_AUTH
+          - ALLOW_REFRESH_TOKEN_AUTH
+        PreventUserExistenceErrors: ENABLED
+        # when trying to sign in with Cognito and user doesn't exists
+        # prevent attackers from guessing user ID or username
+
   Outputs:
     CognitoUserPoolId:
-      Value: !Ref CognitoUserPool # reference CognitoUserPool configured above
+      # reference CognitoUserPool configured above
+      Value: !Ref CognitoUserPool

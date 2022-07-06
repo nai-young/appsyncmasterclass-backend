@@ -2,16 +2,26 @@ name: appsyncmasterclass
 schema: schema.api.graphql
 authenticationType: AMAZON_COGNITO_USER_POOLS
 userPoolConfig:
-  awsRegion: eu-west-1
+  awsRegion: eu-west-2
   defaultAction: ALLOW
   userPoolId: !Ref CognitoUserPool
 mappingTemplatesLocation: mapping-templates
 mappingTemplates:
   - type: Query
     field: getMyProfile
-    dataSource: usersTable # where data is coming from
-    request: Query.getMyProfile.request.vtl
-    response: Query.getMyProfile.response.vtl
+    dataSource: usersTable
+  - type: Query
+    field: getTweets
+    dataSource: tweetsTable
+
+  - type: Mutation
+    field: editMyProfile
+    dataSource: usersTable
+  - type: Mutation
+    field: tweet
+    dataSource: tweetFunction
+    request: false
+    response: false
 
 dataSources:
   - type: NONE
@@ -20,3 +30,11 @@ dataSources:
     name: usersTable
     config:
       tableName: !Ref UsersTable
+  - type: AMAZON_DYNAMODB
+    name: tweetsTable
+    config:
+      tableName: !Ref TweetsTable
+  - type: AWS_LAMBDA
+    name: tweetFunction
+    config:
+      functionName: tweet
